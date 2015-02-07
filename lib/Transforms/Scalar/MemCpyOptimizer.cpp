@@ -750,6 +750,14 @@ bool MemCpyOpt::performCallSlotOptzn(Instruction *cpy,
   // its dependence information by changing its parameter.
   MD->removeInstruction(C);
 
+  // Update AA metadata
+  unsigned KnownIDs[] = {
+    LLVMContext::MD_tbaa,
+    LLVMContext::MD_alias_scope,
+    LLVMContext::MD_noalias,
+  };
+  combineMetadata(C, cpy, KnownIDs);
+
   // Remove the memcpy.
   MD->removeInstruction(cpy);
   ++NumMemCpyInstr;
