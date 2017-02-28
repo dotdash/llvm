@@ -837,7 +837,7 @@ if( LLVM_INCLUDE_UTILS )
   add_subdirectory(utils/not)
   add_subdirectory(utils/llvm-lit)
   add_subdirectory(utils/yaml-bench)
-  add_subdirectory(utils/unittest)
+  # add_subdirectory(utils/unittest)
 else()
   if ( LLVM_INCLUDE_TESTS )
     message(FATAL_ERROR "Including tests when not building utils will not work.
