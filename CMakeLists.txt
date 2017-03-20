@@ -327,6 +327,7 @@ set(LLVM_ALL_TARGETS
   ARM
   BPF
   Hexagon
+  JSBackend # @LOCALMOD
   Lanai
   Mips
   MSP430

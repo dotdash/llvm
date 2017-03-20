@@ -655,10 +655,10 @@ void Verifier::visitGlobalVariable(const GlobalVariable &GV) {
       AssertDI(false, "!dbg attachment of global variable must be a DIGlobalVariableExpression");
   }
 
-  if (!GV.hasInitializer()) {
+  //if (!GV.hasInitializer()) { // XXX EMSCRIPTEN - do not do extra verification below, 40x slower linking on some big projects
     visitGlobalValue(GV);
     return;
-  }
+  //}
 
   // Walk any aggregate initializers looking for bitcasts between address spaces
   visitConstantExprsRecursively(GV.getInitializer());
