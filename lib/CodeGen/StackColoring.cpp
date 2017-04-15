@@ -676,15 +676,19 @@ void StackColoring::calculateLocalLiveness()
 
 void StackColoring::calculateLiveIntervals(unsigned NumSlots) {
   SmallVector<SlotIndex, 16> Starts;
-  SmallVector<SlotIndex, 16> Finishes;
 
   // For each block, find which slots are active within this block
   // and update the live intervals.
   for (const MachineBasicBlock &MBB : *MF) {
     Starts.clear();
     Starts.resize(NumSlots);
-    Finishes.clear();
-    Finishes.resize(NumSlots);
+
+    // Start the interval of the slots that we previously found to be 'alive'.
+    BlockLifetimeInfo &MBBLiveness = BlockLiveness[&MBB];
+    for (int pos = MBBLiveness.LiveIn.find_first(); pos != -1;
+         pos = MBBLiveness.LiveIn.find_next(pos)) {
+      Starts[pos] = Indexes->getMBBStartIdx(&MBB);
+    }
 
     // Create the interval for the basic blocks containing lifetime begin/end.
     for (const MachineInstr &MI : MBB) {
@@ -695,69 +699,25 @@ void StackColoring::calculateLiveIntervals(unsigned NumSlots) {
         continue;
       SlotIndex ThisIndex = Indexes->getInstructionIndex(MI);
       for (auto Slot : slots) {
-        if (IsStart) {
-          if (!Starts[Slot].isValid() || Starts[Slot] > ThisIndex)
-            Starts[Slot] = ThisIndex;
-        } else {
-          if (!Finishes[Slot].isValid() || Finishes[Slot] < ThisIndex)
-            Finishes[Slot] = ThisIndex;
+        if (IsStart && !Starts[Slot].isValid()) {
+          Starts[Slot] = ThisIndex;
+        } else if (!IsStart && Starts[Slot].isValid()) {
+          VNInfo *VNI = Intervals[Slot]->getValNumInfo(0);
+          Intervals[Slot]->addSegment(
+              LiveInterval::Segment(Starts[Slot], ThisIndex, VNI));
+          Starts[Slot] = SlotIndex(); // Invalidate the start index
         }
       }
     }
 
-    // Create the interval of the blocks that we previously found to be 'alive'.
-    BlockLifetimeInfo &MBBLiveness = BlockLiveness[&MBB];
-    for (int pos = MBBLiveness.LiveIn.find_first(); pos != -1;
-         pos = MBBLiveness.LiveIn.find_next(pos)) {
-      Starts[pos] = Indexes->getMBBStartIdx(&MBB);
-    }
-    for (int pos = MBBLiveness.LiveOut.find_first(); pos != -1;
-         pos = MBBLiveness.LiveOut.find_next(pos)) {
-      Finishes[pos] = Indexes->getMBBEndIdx(&MBB);
-    }
-
+    // Finish up started segments
     for (unsigned i = 0; i < NumSlots; ++i) {
-      //
-      // When LifetimeStartOnFirstUse is turned on, data flow analysis
-      // is forward (from starts to ends), not bidirectional. A
-      // consequence of this is that we can wind up in situations
-      // where Starts[i] is invalid but Finishes[i] is valid and vice
-      // versa. Example:
-      //
-      //     LIFETIME_START x
-      //     if (...) {
-      //       <use of x>
-      //       throw ...;
-      //     }
-      //     LIFETIME_END x
-      //     return 2;
-      //
-      //
-      // Here the slot for "x" will not be live into the block
-      // containing the "return 2" (since lifetimes start with first
-      // use, not at the dominating LIFETIME_START marker).
-      //
-      if (Starts[i].isValid() && !Finishes[i].isValid()) {
-        Finishes[i] = Indexes->getMBBEndIdx(&MBB);
-      }
       if (!Starts[i].isValid())
         continue;
 
-      assert(Starts[i] && Finishes[i] && "Invalid interval");
-      VNInfo *ValNum = Intervals[i]->getValNumInfo(0);
-      SlotIndex S = Starts[i];
-      SlotIndex F = Finishes[i];
-      if (S < F) {
-        // We have a single consecutive region.
-        Intervals[i]->addSegment(LiveInterval::Segment(S, F, ValNum));
-      } else {
-        // We have two non-consecutive regions. This happens when
-        // LIFETIME_START appears after the LIFETIME_END marker.
-        SlotIndex NewStart = Indexes->getMBBStartIdx(&MBB);
-        SlotIndex NewFin = Indexes->getMBBEndIdx(&MBB);
-        Intervals[i]->addSegment(LiveInterval::Segment(NewStart, F, ValNum));
-        Intervals[i]->addSegment(LiveInterval::Segment(S, NewFin, ValNum));
-      }
+      SlotIndex EndIdx = Indexes->getMBBEndIdx(&MBB);
+      VNInfo *VNI = Intervals[i]->getValNumInfo(0);
+      Intervals[i]->addSegment(LiveInterval::Segment(Starts[i], EndIdx, VNI));
     }
   }
 }

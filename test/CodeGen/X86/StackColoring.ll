@@ -582,11 +582,40 @@ if.end:                                           ; preds = %if.then, %entry
   ret i32 %x.addr.0
 }
 
+;CHECK-LABEL: multi_segment:
+;YESCOLOR: subq  $256, %rsp
+;NOFIRSTUSE: subq  $256, %rsp
+;NOCOLOR: subq  $512, %rsp
+define i1 @multi_segment(i1, i1)
+{
+entry-block:
+  %foo = alloca [32 x i64]
+  %bar = alloca [32 x i64]
+  %foo_i8 = bitcast [32 x i64]* %foo to i8*
+  %bar_i8 = bitcast [32 x i64]* %bar to i8*
+  call void @llvm.lifetime.start(i64 256, i8* %bar_i8)
+  call void @baz([32 x i64]* %bar, i32 1)
+  call void @llvm.lifetime.end(i64 256, i8* %bar_i8)
+  call void @llvm.lifetime.start(i64 256, i8* %foo_i8)
+  call void @baz([32 x i64]* %foo, i32 1)
+  call void @llvm.lifetime.end(i64 256, i8* %foo_i8)
+  call void @llvm.lifetime.start(i64 256, i8* %bar_i8)
+  call void @baz([32 x i64]* %bar, i32 1)
+  call void @llvm.lifetime.end(i64 256, i8* %bar_i8)
+  ret i1 true
+}
+
+%Data = type { [32 x i64] }
+
+declare void @destructor()
+
 declare void @inita(i32*)
 
 declare void @initb(i32*,i32*,i32*)
 
 declare void @bar([100 x i32]* , [100 x i32]*) nounwind
+
+declare void @baz([32 x i64]*, i32)
 
 declare void @llvm.lifetime.start(i64, i8* nocapture) nounwind
 
