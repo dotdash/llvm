@@ -274,6 +274,8 @@ class StackColoring : public MachineFunctionPass {
 
   /// Maps liveness intervals for each slot.
   SmallVector<std::unique_ptr<LiveInterval>, 16> Intervals;
+  /// Maps slots to the points where they become live
+  SmallVector<SmallVector<SlotIndex, 4>, 16> LiveStarts;
   /// VNInfo is used for the construction of LiveIntervals.
   VNInfo::Allocator VNInfoAllocator;
   /// SlotIndex analysis object.
@@ -676,12 +678,15 @@ void StackColoring::calculateLocalLiveness()
 
 void StackColoring::calculateLiveIntervals(unsigned NumSlots) {
   SmallVector<SlotIndex, 16> Starts;
+  SmallVector<bool, 16> StartSeen;
 
   // For each block, find which slots are active within this block
   // and update the live intervals.
   for (const MachineBasicBlock &MBB : *MF) {
     Starts.clear();
     Starts.resize(NumSlots);
+    StartSeen.clear();
+    StartSeen.resize(NumSlots);
 
     // Start the interval of the slots that we previously found to be 'alive'.
     BlockLifetimeInfo &MBBLiveness = BlockLiveness[&MBB];
@@ -699,8 +704,13 @@ void StackColoring::calculateLiveIntervals(unsigned NumSlots) {
         continue;
       SlotIndex ThisIndex = Indexes->getInstructionIndex(MI);
       for (auto Slot : slots) {
-        if (IsStart && !Starts[Slot].isValid()) {
-          Starts[Slot] = ThisIndex;
+        if (IsStart) {
+          if (!Starts[Slot].isValid() || !StartSeen[Slot]) {
+            LiveStarts[Slot].push_back(ThisIndex);
+            StartSeen[Slot] = true;
+          }
+          if (!Starts[Slot].isValid())
+            Starts[Slot] = ThisIndex;
         } else if (!IsStart && Starts[Slot].isValid()) {
           VNInfo *VNI = Intervals[Slot]->getValNumInfo(0);
           Intervals[Slot]->addSegment(
@@ -948,6 +958,7 @@ bool StackColoring::runOnMachineFunction(MachineFunction &Func) {
   BasicBlockNumbering.clear();
   Markers.clear();
   Intervals.clear();
+  LiveStarts.clear();
   VNInfoAllocator.Reset();
 
   unsigned NumSlots = MFI->getObjectIndexEnd();
@@ -959,6 +970,7 @@ bool StackColoring::runOnMachineFunction(MachineFunction &Func) {
   SmallVector<int, 8> SortedSlots;
   SortedSlots.reserve(NumSlots);
   Intervals.reserve(NumSlots);
+  LiveStarts.resize(NumSlots);
 
   unsigned NumMarkers = collectMarkers(NumSlots);
 
@@ -1030,6 +1042,9 @@ bool StackColoring::runOnMachineFunction(MachineFunction &Func) {
     return MFI->getObjectSize(LHS) > MFI->getObjectSize(RHS);
   });
 
+  for (auto &s : LiveStarts)
+    std::sort(s.begin(), s.end());
+
   bool Changed = true;
   while (Changed) {
     Changed = false;
@@ -1045,12 +1060,21 @@ bool StackColoring::runOnMachineFunction(MachineFunction &Func) {
         int SecondSlot = SortedSlots[J];
         LiveInterval *First = &*Intervals[FirstSlot];
         LiveInterval *Second = &*Intervals[SecondSlot];
+        auto &FirstS = LiveStarts[FirstSlot];
+        auto &SecondS = LiveStarts[SecondSlot];
         assert (!First->empty() && !Second->empty() && "Found an empty range");
 
         // Merge disjoint slots.
-        if (!First->overlaps(*Second)) {
+        if (!First->isLiveAtIndexes(SecondS) &&
+            !Second->isLiveAtIndexes(FirstS)) {
           Changed = true;
           First->MergeSegmentsInAsValue(*Second, First->getValNumInfo(0));
+
+          int OldSize = FirstS.size();
+          FirstS.append(SecondS.begin(), SecondS.end());
+          auto Mid = FirstS.begin() + OldSize;
+          std::inplace_merge(FirstS.begin(), Mid, FirstS.end());
+
           SlotRemap[SecondSlot] = FirstSlot;
           SortedSlots[J] = -1;
           DEBUG(dbgs()<<"Merging #"<<FirstSlot<<" and slots #"<<
